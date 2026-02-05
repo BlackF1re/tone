@@ -1,0 +1,12 @@
+# .gitignore
+# Исключаем бинарники и временные файлы
+*.o
+*.out
+*.exe
+tone
+*.swp
+*.swo
+*.bak
+*~
+.DS_Store
+Thumbs.db
