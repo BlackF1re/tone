@@ -12,11 +12,21 @@
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <dirent.h>
+#include <stdarg.h>
+
+// Log levels для простого логирования без syslog.h
+#define LOG_INFO "INFO"
+#define LOG_WARN "WARN"
+#define LOG_ERR "ERROR"
 
 // Конфигурация для сборки - может быть переопределена при компиляции
 #ifndef BUZZER_GPIO_PATH
 #define BUZZER_GPIO_PATH ""  // Пусто = автоопределение
 #endif
+
+#define CONFIG_FILE "/etc/tone.conf"
+#define LOG_TAG "tone"
 
 #define SPIN_THRESHOLD_US 100       // Микросекунды перед переключением на спин-лок
 #define FREQ_MIN 20                 // Минимальная частота (Гц)
@@ -25,6 +35,24 @@
 #define FREQ_OPTIMAL_MAX 5000
 #define MAX_DURATION_MS 300000      // Максимум 5 минут
 #define PWM_CARRIER_FREQ 10000      // Частота несущей для PWM (10 кГц)
+
+// Структура конфигурации
+typedef struct {
+    char buzzer_path[256];
+    int spin_threshold_us;
+    int pwm_carrier_freq;
+    int default_volume;
+    int enabled;
+} tone_config_t;
+
+// Конфигурация по умолчанию
+tone_config_t default_config = {
+    .buzzer_path = "",
+    .spin_threshold_us = 100,
+    .pwm_carrier_freq = 10000,
+    .default_volume = 100,
+    .enabled = 1
+};
 
 volatile sig_atomic_t stop_signal = 0;
 
@@ -38,6 +66,32 @@ typedef struct {
 } stats_t;
 
 stats_t stats = {0};
+
+// Логирование в syslog
+void log_message(const char *level, const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    
+    // Выводим в stderr
+    fprintf(stderr, "[%s] ", level);
+    vfprintf(stderr, format, args);
+    fprintf(stderr, "\n");
+    
+    // Логируем в syslog через logger
+    char cmd[512];
+    va_list args2;
+    va_copy(args2, args);
+    vsnprintf(cmd, sizeof(cmd), format, args2);
+    va_end(args2);
+    
+    char logger_cmd[768];
+    snprintf(logger_cmd, sizeof(logger_cmd), "logger -t %s -p daemon.%s \"%s\"", 
+             LOG_TAG, strcmp(level, "ERROR") == 0 ? "err" : 
+                      strcmp(level, "WARN") == 0 ? "warning" : "info", cmd);
+    system(logger_cmd);
+    
+    va_end(args);
+}
 
 // Функция для получения времени в наносекундах
 static inline long long get_nsecs() {
@@ -59,16 +113,179 @@ long long measure_overhead() {
     return (get_nsecs() - start) / 1000;
 }
 
-// Поиск файла баззера в стандартных местах
-const char* find_buzzer_device() {
+// Чтение конфигурации из файла
+void load_config(tone_config_t *config) {
+    *config = default_config;
+    
+    FILE *f = fopen(CONFIG_FILE, "r");
+    if (!f) {
+        return;  // Конфига нет - используем значения по умолчанию
+    }
+    
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        // Удаляем комментарии и пробелы
+        char *comment = strchr(line, '#');
+        if (comment) *comment = '\0';
+        
+        // Парсим переменную=значение
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        
+        *eq = '\0';
+        char *key = line;
+        char *value = eq + 1;
+        
+        // Удаляем пробелы
+        while (*key && *key == ' ') key++;
+        while (*value && (*value == ' ' || *value == '\n')) value++;
+        char *end = value + strlen(value) - 1;
+        while (end >= value && (*end == ' ' || *end == '\n')) *end-- = '\0';
+        
+        // Парсим параметры
+        if (strcmp(key, "buzzer_path") == 0) {
+            strncpy(config->buzzer_path, value, sizeof(config->buzzer_path) - 1);
+        } else if (strcmp(key, "spin_threshold_us") == 0) {
+            config->spin_threshold_us = atoi(value);
+        } else if (strcmp(key, "pwm_carrier_freq") == 0) {
+            config->pwm_carrier_freq = atoi(value);
+        } else if (strcmp(key, "default_volume") == 0) {
+            config->default_volume = atoi(value);
+        } else if (strcmp(key, "enabled") == 0) {
+            config->enabled = atoi(value);
+        }
+    }
+    
+    fclose(f);
+}
+
+// Сохранение конфигурации в файл
+void save_config(const tone_config_t *config) {
+    FILE *f = fopen(CONFIG_FILE, "w");
+    if (!f) {
+        log_message("WARN", "Cannot write config to %s", CONFIG_FILE);
+        return;
+    }
+    
+    fprintf(f, "# OpenWRT Tone Generator Configuration\n");
+    fprintf(f, "# Auto-generated config file\n\n");
+    fprintf(f, "buzzer_path=%s\n", config->buzzer_path);
+    fprintf(f, "spin_threshold_us=%d\n", config->spin_threshold_us);
+    fprintf(f, "pwm_carrier_freq=%d\n", config->pwm_carrier_freq);
+    fprintf(f, "default_volume=%d\n", config->default_volume);
+    fprintf(f, "enabled=%d\n", config->enabled);
+    
+    fclose(f);
+    log_message("INFO", "Configuration saved to %s", CONFIG_FILE);
+}
+
+// Поиск баззера по GPIO labels
+const char* find_buzzer_by_label() {
+    static char found_path[256] = {0};
+    DIR *gpio_dir;
+    struct dirent *entry;
+    
+    gpio_dir = opendir("/sys/class/gpio");
+    if (!gpio_dir) return NULL;
+    
+    while ((entry = readdir(gpio_dir)) != NULL) {
+        if (strncmp(entry->d_name, "gpio", 4) != 0) continue;
+        
+        // Проверяем label файл
+        char label_path[256];
+        snprintf(label_path, sizeof(label_path), "/sys/class/gpio/%s/label", entry->d_name);
+        
+        FILE *f = fopen(label_path, "r");
+        if (!f) continue;
+        
+        char label[64];
+        if (fgets(label, sizeof(label), f)) {
+            // Удаляем перевод строки
+            label[strcspn(label, "\n")] = '\0';
+            
+            if (strstr(label, "buzzer") || strstr(label, "beep") || strstr(label, "speaker")) {
+                // Нашли! Проверяем наличие value файла
+                snprintf(found_path, sizeof(found_path), "/sys/class/gpio/%s/value", entry->d_name);
+                if (access(found_path, W_OK) == 0) {
+                    fclose(f);
+                    closedir(gpio_dir);
+                    return found_path;
+                }
+            }
+        }
+        fclose(f);
+    }
+    
+    closedir(gpio_dir);
+    return NULL;
+}
+
+// Динамический поиск баззера в /sys/class/gpio/
+const char* find_buzzer_by_scan() {
+    static char found_path[256] = {0};
+    DIR *gpio_dir;
+    struct dirent *entry;
+    
+    gpio_dir = opendir("/sys/class/gpio");
+    if (!gpio_dir) return NULL;
+    
+    // Ищем файлы gpio*/value и пробуем первый найденный
+    while ((entry = readdir(gpio_dir)) != NULL) {
+        if (strncmp(entry->d_name, "gpio", 4) != 0) continue;
+        
+        snprintf(found_path, sizeof(found_path), "/sys/class/gpio/%s/value", entry->d_name);
+        
+        // Пробуем записать - если можно, то это потенциально баззер
+        if (access(found_path, W_OK) == 0) {
+            // Проверяем что это не "gpiochip"
+            if (strchr(entry->d_name + 4, 'c') == NULL) {  // Исключаем gpiochipXX
+                closedir(gpio_dir);
+                return found_path;
+            }
+        }
+    }
+    
+    closedir(gpio_dir);
+    return NULL;
+}
+
+// Поиск в device-tree
+const char* find_buzzer_in_device_tree() {
+    DIR *dt_dir;
+    struct dirent *entry;
+    
+    dt_dir = opendir("/proc/device-tree");
+    if (!dt_dir) return NULL;
+    
+    // Ищем папки с "buzzer" или "beeper" в названии
+    while ((entry = readdir(dt_dir)) != NULL) {
+        if (strstr(entry->d_name, "buzzer") || strstr(entry->d_name, "beeper")) {
+            // Пробуем найти соответствующий GPIO в /sys/class/gpio/
+            // Это упрощённый поиск - на реальных системах нужнопарсить device tree binary
+            closedir(dt_dir);
+            
+            // Возвращаемся к обычному поиску, но знаем что баззер есть
+            return find_buzzer_by_scan();
+        }
+    }
+    
+    closedir(dt_dir);
+    return NULL;
+}
+
+// Главная функция поиска баззера
+const char* find_buzzer_device(const tone_config_t *config) {
     static char found_path[256] = {0};
     
-    // Стандартные пути для OpenWRT баззеров
+    // 1. Сначала ищем в конфиге
+    if (strlen(config->buzzer_path) > 0 && access(config->buzzer_path, W_OK) == 0) {
+        return config->buzzer_path;
+    }
+    
+    // 2. Hardcoded пути (быстро)
     const char *search_paths[] = {
-        // Типовой путь для MediaTek/Ralink
         "/sys/devices/platform/1e000000.palmbus/1e000600.gpio/gpiochip0/gpio/buzzer/value",
         "/sys/devices/platform/10000000.palmbus/10000600.gpio/gpiochip0/gpio/buzzer/value",
-        // Альтернативные пути
         "/sys/class/gpio/buzzer/value",
         "/sys/class/gpio/gpio0/value",
         "/sys/class/gpio/gpio1/value",
@@ -85,6 +302,18 @@ const char* find_buzzer_device() {
         }
     }
     
+    // 3. Поиск по labels
+    const char *label_path = find_buzzer_by_label();
+    if (label_path) return label_path;
+    
+    // 4. Динамический поиск в /sys/class/gpio/
+    const char *scan_path = find_buzzer_by_scan();
+    if (scan_path) return scan_path;
+    
+    // 5. Поиск в device-tree
+    const char *dt_path = find_buzzer_in_device_tree();
+    if (dt_path) return dt_path;
+    
     return NULL;
 }
 
@@ -99,8 +328,8 @@ char read_gpio_state(int fd) {
 }
 
 // Гибридное ожидание: sleep + spin-lock для точности
-void wait_until(long long target_time) {
-    long long sleep_threshold_ns = SPIN_THRESHOLD_US * 1000LL;
+void wait_until(long long target_time, int spin_threshold_us) {
+    long long sleep_threshold_ns = (long long)spin_threshold_us * 1000LL;
     long long now = get_nsecs();
     
     if (now >= target_time) return;
@@ -122,7 +351,7 @@ void wait_until(long long target_time) {
 }
 
 // PWM генерация для контроля громкости (0-100%)
-void generate_tone_pwm(int fd, int freq, long duration_ms, int volume) {
+void generate_tone_pwm(int fd, int freq, long duration_ms, int volume, int spin_threshold_us) {
     if (volume < 0) volume = 0;
     if (volume > 100) volume = 100;
     
@@ -137,7 +366,7 @@ void generate_tone_pwm(int fd, int freq, long duration_ms, int volume) {
             stats.errors++;
             break;
         }
-        wait_until(get_nsecs() + pulse_width_ns);
+        wait_until(get_nsecs() + pulse_width_ns, spin_threshold_us);
         
         // Пауза (LOW)
         if (write(fd, "0", 1) < 0) {
@@ -145,14 +374,14 @@ void generate_tone_pwm(int fd, int freq, long duration_ms, int volume) {
             break;
         }
         long long pause_ns = period_ns - pulse_width_ns;
-        wait_until(get_nsecs() + pause_ns);
+        wait_until(get_nsecs() + pause_ns, spin_threshold_us);
         
         stats.toggles += 2;
     }
 }
 
 // Обычная генерация тона (100% мощность)
-void generate_tone_normal(int fd, int freq, long duration_ms) {
+void generate_tone_normal(int fd, int freq, long duration_ms, int spin_threshold_us) {
     long long period_ns = 1000000000LL / freq;
     long long half_period_ns = period_ns / 2;
     long long start_time = get_nsecs();
@@ -185,7 +414,7 @@ void generate_tone_normal(int fd, int freq, long duration_ms) {
         stats.toggles++;
         
         long long next_switch = get_nsecs() + half_period_ns;
-        wait_until(next_switch);
+        wait_until(next_switch, spin_threshold_us);
     }
     
     stats.total_ns = get_nsecs() - start_time;
@@ -284,7 +513,7 @@ int parse_args(int argc, char *argv[], int *freq, long *duration_ms,
 }
 
 // Chirp (частотная модуляция) - линейный свип от freq1 к freq2
-void generate_tone_chirp(int fd, int freq1, int freq2, long duration_ms) {
+void generate_tone_chirp(int fd, int freq1, int freq2, long duration_ms, int spin_threshold_us) {
     long long start_time = get_nsecs();
     long long end_time = start_time + (long long)duration_ms * 1000000LL;
     long long total_time = end_time - start_time;
@@ -317,7 +546,7 @@ void generate_tone_chirp(int fd, int freq1, int freq2, long duration_ms) {
         stats.toggles++;
         
         long long next_switch = prev_switch + half_period_ns;
-        wait_until(next_switch);
+        wait_until(next_switch, spin_threshold_us);
         prev_switch = next_switch;
     }
     
@@ -329,8 +558,17 @@ int main(int argc, char *argv[]) {
     long duration_ms = 0;
     const char *device_path = NULL;
     int verbose = 0;
-    int pwm_volume = 100;
+    int pwm_volume = -1;  // -1 = use config default
     int chirp_freq = 0;
+    
+    // Загружаем конфиг
+    tone_config_t config;
+    load_config(&config);
+    
+    if (config.enabled == 0) {
+        log_message(LOG_INFO, "tone: disabled in config");
+        return 0;
+    }
     
     // Парсим аргументы
     int parse_result = parse_args(argc, argv, &freq, &duration_ms, &device_path, &verbose, &pwm_volume, &chirp_freq);
@@ -351,26 +589,41 @@ int main(int argc, char *argv[]) {
         }
     }
     
+    // Если PWM volume не указан в командной строке, используем значение из конфига
+    if (pwm_volume < 0) {
+        pwm_volume = config.default_volume;
+    }
+    
     // Определяем путь к баззеру
     if (!device_path) {
-        device_path = getenv("BUZZER_GPIO");
-        if (!device_path || strlen(device_path) == 0) {
-            // Если определён путь при компиляции, используем его
-            if (strlen(BUZZER_GPIO_PATH) > 0) {
-                device_path = BUZZER_GPIO_PATH;
-            } else {
-                // Иначе ищем автоматически
-                device_path = find_buzzer_device();
-                if (!device_path) {
-                    fprintf(stderr, "Error: buzzer device not found\n");
-                    fprintf(stderr, "Please specify with -d option or BUZZER_GPIO environment variable\n");
-                    return 1;
-                }
-                if (verbose) {
-                    fprintf(stderr, "Auto-detected buzzer at: %s\n", device_path);
-                }
+        // 1. Сначала проверяем конфиг файл
+        if (strlen(config.buzzer_path) > 0) {
+            device_path = config.buzzer_path;
+            if (verbose) {
+                fprintf(stderr, "Using buzzer path from config: %s\n", device_path);
+            }
+        } else {
+            // 2. Если в конфиге нет пути, ищем автоматически
+            device_path = find_buzzer_device(&config);
+            if (!device_path) {
+                log_message(LOG_ERR, "tone: buzzer device not found");
+                fprintf(stderr, "Error: buzzer device not found\n");
+                fprintf(stderr, "Please specify with -d option or BUZZER_GPIO environment variable\n");
+                return 1;
+            }
+            if (verbose) {
+                fprintf(stderr, "Auto-detected buzzer at: %s\n", device_path);
+            }
+            // Сохраняем найденный путь в конфиг для следующего запуска
+            strncpy(config.buzzer_path, device_path, sizeof(config.buzzer_path) - 1);
+            save_config(&config);
+            if (verbose) {
+                fprintf(stderr, "Saved buzzer path to config: %s\n", CONFIG_FILE);
             }
         }
+    } else {
+        // Если путь указан в командной строке, обновляем конфиг
+        strncpy(config.buzzer_path, device_path, sizeof(config.buzzer_path) - 1);
     }
     
     if (verbose) {
@@ -431,22 +684,22 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Starting tone generation...\n");
         }
         
-        // Выбираем режим генерации
+        // Выбираем режим генерации, передаём spin_threshold из конфига
         if (chirp_freq > 0) {
             // Chirp режим
-            generate_tone_chirp(fd, freq, chirp_freq, duration_ms);
+            generate_tone_chirp(fd, freq, chirp_freq, duration_ms, config.spin_threshold_us);
         } else if (pwm_volume < 100) {
             // PWM режим
-            generate_tone_pwm(fd, freq, duration_ms, pwm_volume);
+            generate_tone_pwm(fd, freq, duration_ms, pwm_volume, config.spin_threshold_us);
         } else {
             // Нормальный режим
-            generate_tone_normal(fd, freq, duration_ms);
+            generate_tone_normal(fd, freq, duration_ms, config.spin_threshold_us);
         }
     }
     
     // Гарантированно выключаем баззер
     if (write(fd, "0", 1) < 0) {
-        perror("Warning: failed to turn off buzzer");
+        log_message(LOG_ERR, "tone: failed to turn off buzzer");
     }
     
     // Восстанавливаем исходное состояние GPIO
