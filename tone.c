@@ -117,9 +117,13 @@ long long measure_overhead() {
 void load_config(tone_config_t *config) {
     *config = default_config;
     
+    // Пытаемся читать из /etc/tone.conf, потом из ./tone.conf
     FILE *f = fopen(CONFIG_FILE, "r");
     if (!f) {
-        return;  // Конфига нет - используем значения по умолчанию
+        f = fopen("./tone.conf", "r");
+        if (!f) {
+            return;  // Ни один конфиг не найден - используем значения по умолчанию
+        }
     }
     
     char line[512];
@@ -161,10 +165,18 @@ void load_config(tone_config_t *config) {
 
 // Сохранение конфигурации в файл
 void save_config(const tone_config_t *config) {
-    FILE *f = fopen(CONFIG_FILE, "w");
+    const char *config_path = CONFIG_FILE;
+    FILE *f = fopen(config_path, "w");
+    
+    // Если /etc/tone.conf не доступен, пытаемся создать в текущей директории
     if (!f) {
-        log_message("WARN", "Cannot write config to %s", CONFIG_FILE);
-        return;
+        config_path = "./tone.conf";
+        f = fopen(config_path, "w");
+        if (!f) {
+            log_message("WARN", "Cannot write config to %s or ./tone.conf", CONFIG_FILE);
+            return;
+        }
+        log_message("WARN", "/etc/ not accessible, using local config: %s", config_path);
     }
     
     fprintf(f, "# OpenWRT Tone Generator Configuration\n");
@@ -176,7 +188,7 @@ void save_config(const tone_config_t *config) {
     fprintf(f, "enabled=%d\n", config->enabled);
     
     fclose(f);
-    log_message("INFO", "Configuration saved to %s", CONFIG_FILE);
+    log_message("INFO", "Configuration saved to %s", config_path);
 }
 
 // Поиск баззера по GPIO labels
@@ -441,6 +453,9 @@ void print_usage(const char *prog) {
     printf("  %s 1000 500 -c 2000            # Chirp from 1kHz to 2kHz\n", prog);
     printf("  %s 1000 500 -v                 # Verbose mode\n", prog);
     printf("\nNote: Requires root privileges for real-time scheduling.\n");
+    printf("\nNote: Optimal frequency range for piezo buzzers is typically 2-5 kHz.\n");
+    printf("Config file location: /etc/tone.conf\n");
+
 }
 
 int parse_args(int argc, char *argv[], int *freq, long *duration_ms, 
