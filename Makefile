@@ -3,7 +3,7 @@
 # Compiler and flags
 CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99
-LDFLAGS = -lrt
+LDFLAGS ?= -lrt
 
 # Target executable
 TARGET = tone
@@ -18,7 +18,7 @@ all: $(TARGET)
 
 # Compilation rule
 $(TARGET): $(OBJECTS)
-	$(CC) $(CFLAGS) -o $(TARGET) $(OBJECTS) $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $(TARGET) $(OBJECTS) $(LDFLAGS) || $(CC) $(CFLAGS) -o $(TARGET) $(OBJECTS)
 
 # Object file compilation
 %.o: %.c

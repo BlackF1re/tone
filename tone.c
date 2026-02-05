@@ -1,3 +1,6 @@
+#define _POSIX_C_SOURCE 199309L
+#define _DEFAULT_SOURCE
+
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -7,7 +10,6 @@
 #include <string.h>
 #include <signal.h>
 #include <errno.h>
-#include <syslog.h>
 #include <sys/types.h>
 
 #define DEFAULT_BUZZER_PATH "/sys/devices/platform/1e000000.palmbus/1e000600.gpio/gpiochip0/gpio/buzzer/value"
@@ -28,6 +30,7 @@ static inline long long get_nsecs() {
 
 // Обработчик сигналов для graceful shutdown
 void signal_handler(int sig) {
+    (void)sig;  // Подавляем warning неиспользуемого параметра
     stop_signal = 1;
 }
 
