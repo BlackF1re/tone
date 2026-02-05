@@ -369,26 +369,29 @@ void generate_tone_pwm(int fd, int freq, long duration_ms, int volume, int spin_
     
     long long period_ns = 1000000000LL / freq;
     long long pulse_width_ns = (period_ns * volume) / 100;
+    long long pause_ns = period_ns - pulse_width_ns;
     long long start_time = get_nsecs();
     long long end_time = start_time + (long long)duration_ms * 1000000LL;
+    long long next_switch = start_time;
     
     while (get_nsecs() < end_time && !stop_signal) {
-        // Импульс (HIGH)
+        // Импульс (HIGH) - абсолютное время переключения
+        next_switch += pulse_width_ns;
         if (write(fd, "1", 1) < 0) {
             stats.errors++;
             break;
         }
-        wait_until(get_nsecs() + pulse_width_ns, spin_threshold_us);
+        wait_until(next_switch, spin_threshold_us);
+        stats.toggles++;
         
-        // Пауза (LOW)
+        // Пауза (LOW) - абсолютное время переключения
+        next_switch += pause_ns;
         if (write(fd, "0", 1) < 0) {
             stats.errors++;
             break;
         }
-        long long pause_ns = period_ns - pulse_width_ns;
-        wait_until(get_nsecs() + pause_ns, spin_threshold_us);
-        
-        stats.toggles += 2;
+        wait_until(next_switch, spin_threshold_us);
+        stats.toggles++;
     }
 }
 
@@ -398,7 +401,8 @@ void generate_tone_normal(int fd, int freq, long duration_ms, int spin_threshold
     long long half_period_ns = period_ns / 2;
     long long start_time = get_nsecs();
     long long end_time = start_time + (long long)duration_ms * 1000000LL;
-    long long prev_time = start_time;
+    long long next_switch = start_time;
+    long long prev_switch = start_time;
     
     int state = 0;
     
@@ -406,26 +410,27 @@ void generate_tone_normal(int fd, int freq, long duration_ms, int spin_threshold
         state = !state;
         const char *value = state ? "1" : "0";
         
+        // Вычисляем СЛЕДУЮЩЕЕ время переключения ПЕРЕД write()
+        next_switch += half_period_ns;
+        
         if (write(fd, value, 1) < 0) {
             stats.errors++;
             break;
         }
         
-        long long now = get_nsecs();
-        long long period = now - prev_time;
-        
+        // Отслеживаем период для статистики
         if (stats.toggles > 0) {
+            long long period = next_switch - prev_switch;
             if (period < stats.min_period_ns) stats.min_period_ns = period;
             if (period > stats.max_period_ns) stats.max_period_ns = period;
         } else {
-            stats.min_period_ns = period;
-            stats.max_period_ns = period;
+            stats.min_period_ns = half_period_ns;
+            stats.max_period_ns = half_period_ns;
         }
         
-        prev_time = now;
+        prev_switch = next_switch;
         stats.toggles++;
         
-        long long next_switch = get_nsecs() + half_period_ns;
         wait_until(next_switch, spin_threshold_us);
     }
     
