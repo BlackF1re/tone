@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <stdarg.h>
+#include <limits.h>
 
 // Log levels для простого логирования без syslog.h
 #define LOG_INFO "INFO"
@@ -106,11 +107,20 @@ void signal_handler(int sig) {
     stop_signal = 1;
 }
 
-// Измерение overhead цикла для калибровки
-long long measure_overhead() {
-    long long start = get_nsecs();
-    for (volatile int i = 0; i < 1000; i++);
-    return (get_nsecs() - start) / 1000;
+// Измерение overhead syscall write для GPIO
+long long measure_write_overhead(int fd) {
+    long long min_overhead = LLONG_MAX;
+    
+    // Несколько прогревочных вызовов
+    for (int i = 0; i < 10; i++) {
+        long long start = get_nsecs();
+        write(fd, "1", 1);
+        long long end = get_nsecs();
+        long long overhead = end - start;
+        if (overhead < min_overhead) min_overhead = overhead;
+    }
+    
+    return min_overhead > 0 ? min_overhead : 1000;  // Минимум 1 микросекунда
 }
 
 // Чтение конфигурации из файла
@@ -370,6 +380,16 @@ void generate_tone_pwm(int fd, int freq, long duration_ms, int volume, int spin_
     long long period_ns = 1000000000LL / freq;
     long long pulse_width_ns = (period_ns * volume) / 100;
     long long pause_ns = period_ns - pulse_width_ns;
+    
+    // Компенсируем overhead write() - вычитаем из длительности импульса
+    long long write_overhead = measure_write_overhead(fd);
+    if (pulse_width_ns > write_overhead) {
+        pulse_width_ns -= write_overhead;
+    }
+    if (pause_ns > write_overhead) {
+        pause_ns -= write_overhead;
+    }
+    
     long long start_time = get_nsecs();
     long long end_time = start_time + (long long)duration_ms * 1000000LL;
     long long next_switch = start_time;
@@ -699,8 +719,8 @@ int main(int argc, char *argv[]) {
         usleep(duration_ms * 1000);
     } else {
         if (verbose) {
-            long long overhead = measure_overhead();
-            fprintf(stderr, "Loop overhead: ~%lld ns\n", overhead);
+            long long overhead = measure_write_overhead(fd);
+            fprintf(stderr, "GPIO write() overhead: ~%lld ns\n", overhead);
             fprintf(stderr, "Starting tone generation...\n");
         }
         
