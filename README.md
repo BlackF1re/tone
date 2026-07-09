@@ -1,1396 +1,156 @@
-# OpenWRT Tone Generator
+# otone
 
-Утилита для воспроизведения звуков (тонов) на роутерах с OpenWRT через встроенный баззер.
+`otone` is a small OpenWrt/Linux command line tool for playing beeps, alerts, chirps, and simple melodies through a router buzzer connected to GPIO sysfs.
 
-## 📑 Содержание
+It is useful for OpenWrt router diagnostics, audible boot/status alerts, GPIO buzzer testing, embedded Linux experiments, and tiny shell-script notifications.
 
-- [Описание](#описание)
-- [Быстрый старт](#быстрый-старт)
-- [Сборка](#сборка)
-- [Использование](#использование)
-- [Примеры команд](#примеры-команд)
-- [Примеры скриптов](#примеры-скриптов)
-- [Встроенные мелодии](#-встроенные-мелодии-sounds)
-- [Конфигурация и система обнаружения баззера](#конфигурация-и-система-обнаружения-баззера)
-- [Поиск пути к баззеру](#поиск-пути-к-баззеру-если-автоопределение-не-сработало)
-- [Возможности версии 3.0](#возможности-версии-30)
-- [Примеры использования конфигурации](#примеры-использования-конфигурации)
-- [Рекомендации](#рекомендации)
-- [Troubleshooting](#-troubleshooting---если-что-то-не-работает)
-- [Быстрая диагностика](#-быстрая-диагностика-скопируйте-и-запустите)
+## Features
 
----
+- Written in C with minimal dependencies
+- Works through `/sys/class/gpio/.../value`
+- Auto-detects common buzzer GPIO paths
+- Saves the detected buzzer path to `/etc/otone.conf`
+- Supports fixed frequency beeps, silence, PWM volume, and chirp frequency sweeps
+- Optional verbose diagnostics and simple timing statistics
+- Includes a Mario melody script example in `sounds/mario.sh`
 
-## Описание
+## Install on OpenWrt by copy-paste
 
-Программа `tone` позволяет генерировать звуки на роутере путём управления GPIO пином, подключённым к баззеру (пьезоэлектрическому звукоизлучателю).
+SSH into the router and run:
 
-### Основные характеристики
-
-- ✅ Управление баззером через sysfs интерфейс GPIO
-- ✅ Real-Time приоритет (SCHED_FIFO) для точного управления частотой
-- ✅ **Система конфигурации** (`/etc/tone.conf`) с сохранением найденного пути
-- ✅ **7-слойное автоопределение** баззера с fallback механизмом
-- ✅ **Первый запуск** автоматически определяет и сохраняет путь для быстрых последующих запусков
-- ✅ PWM контроль громкости (0-100%) с параметризацией в конфиге
-- ✅ Chirp (частотная модуляция/свип частоты)
-- ✅ Расширенная статистика и диагностика
-- ✅ Логирование ошибок в syslog
-- ✅ Минимальные зависимости (только стандартная библиотека C)
-
----
-
-## 🎯 Выбери свой путь
-
-**Если ты не знаешь с чего начать, выбери вариант:**
-
-- 👨‍💻 **У меня есть компилятор (gcc)** → [Способ 1](#способ-1-на-компьютере)
-- 🌐 **Я на роутере и там есть gcc** → [Способ 2](#способ-2-на-роутере)
-- ❌ **На роутере нет gcc** → [Способ 3](#способ-3-кросс-компиляция)
-- 🤔 **Я не знаю есть ли gcc** → [Проверка](#как-проверить-есть-ли-gcc)
-
----
-
-## Быстрая проверка: что у вас есть?
-
-### Как проверить есть ли gcc
-
-```bash
-# На вашем компьютере или роутере запустите:
-gcc --version
-
-# Если вывело версию — gcc установлен! ✅
-# Если сказало "command not found" — нужно установить
-```
-
-### Как проверить есть ли make
-
-```bash
-make --version
-
-# Если вывело версию — можно использовать Makefile ✅
-```
-
-### Где вы находитесь?
-
-Это важно знать:
-
-```bash
-# НА КОМПЬЮТЕРЕ (Windows/Mac/Linux) — можете собрать программу:
-# - Если есть gcc и make → Способ 1
-# - Если нет → установите (инструкции ниже)
-
-# НА РОУТЕРЕ (через SSH) — можете собрать прямо там:
-# - Если есть gcc → Способ 2
-# - Если нет → Способ 3 (собирайте на компьютере)
-
-ssh root@192.168.1.1  # Подключиться к роутеру
-```
-
----
-
-## 🔧 Сборка
-
-### Требования
-
-| Компонент | Описание | Как проверить |
-|-----------|---------|---------------|
-| **ОС** | OpenWRT / Linux | На роутере |
-| **Компилятор gcc** | Для компиляции | `gcc --version` |
-| **Библиотеки libc, librt** | Обычно встроены | Часто есть сразу |
-| **root доступ** | На роутере | SSH с паролем root |
-
-### 🌟 Способ 1: На компьютере (РЕКОМЕНДУЕТСЯ для новичков)
-
-**Для:** У вас есть gcc и make, вы хотите собрать программу один раз
-
-**Шаг 1: Скачайте исходник**
-```bash
-git clone <repo> tone
-cd tone
-```
-
-**Шаг 2: Проверьте gcc**
-```bash
-gcc --version  # Должна вывести версию
-```
-
-**Шаг 3: Скомпилируйте**
-```bash
-make clean
-make
-```
-
-**Готово!** Бинарник находится в файле `./tone`
-
-**Шаг 4: Скопируйте на роутер**
-```bash
-scp tone root@192.168.1.1:/usr/bin/
-ssh root@192.168.1.1 chmod +x /usr/bin/tone
-```
-
-**Шаг 5: Проверьте на роутере**
-```bash
-ssh root@192.168.1.1
-tone 2000 500  # Должен быть звук!
-```
-
----
-
-### 🔄 Способ 2: На роутере (если там есть gcc)
-
-**Для:** У вас есть SSH доступ к роутеру и там установлен gcc
-
-**Шаг 1: Проверьте gcc на роутере**
-```bash
-ssh root@192.168.1.1
-gcc --version
-```
-
-Если вывело версию → идите к шагу 3
-Если "command not found" → идите к шагу 2
-
-**Шаг 2: Установите gcc (если нужно)**
-```bash
+```sh
 opkg update
-opkg install gcc libc-dev
-# Это может занять 5-10 минут!
-```
-
-**Шаг 3: Скопируйте исходники**
-```bash
-# На вашем компьютере:
-scp tone.c Makefile root@192.168.1.1:/tmp/
-```
-
-**Шаг 4: Скомпилируйте на роутере**
-```bash
-# На роутере:
+opkg install git git-http gcc make libc-dev
 cd /tmp
+git clone https://github.com/BlackF1re/otone.git
+cd otone
 make
+install -D -m 0755 ./otone /usr/bin/otone
+otone 2000 300
 ```
 
-**Готово!** Бинарник: `/tmp/tone`
+If the repository is still available through the old GitHub redirect, this also works:
 
-**Шаг 5: Установите**
-```bash
-cp /tmp/tone /usr/bin/
-chmod +x /usr/bin/tone
-tone 2000 500  # Проверка
+```sh
+opkg update
+opkg install git git-http gcc make libc-dev
+cd /tmp
+git clone https://github.com/BlackF1re/tone.git otone
+cd otone
+make
+install -D -m 0755 ./otone /usr/bin/otone
+otone 2000 300
 ```
 
----
+## Install from a local Linux PC
 
-### 🚀 Способ 3: Ручная компиляция (если make не работает)
-
-**Для:** У вас нет make, но есть gcc
-
-```bash
-# На современных Linux и OpenWRT (без -lrt):
-gcc -O2 -o tone tone.c
-
-# На старых системах (может потребоваться -lrt):
-gcc -O2 -o tone tone.c -lrt
-
-# Готово! Файл tone готов к использованию
+```sh
+git clone https://github.com/BlackF1re/otone.git
+cd otone
+make
+scp ./otone root@192.168.1.1:/usr/bin/otone
+ssh root@192.168.1.1 'chmod +x /usr/bin/otone && otone 2000 300'
 ```
 
-**С фиксированным путём (ускорение, пропуск auto-detection):**
-```bash
-gcc -O2 -DBUZZER_GPIO_PATH=\"/sys/class/gpio/gpio10/value\" -o tone tone.c
+## Manual build
+
+```sh
+gcc -O2 -Wall -Wextra -std=c99 -o otone otone.c -lm
 ```
 
-**Примечание:** Флаг `-lrt` может отсутствовать на современных системах с musl libc (OpenWRT). Если ошибка "cannot find -lrt", просто опустите этот флаг.
+Build with a fixed GPIO path to skip detection:
 
----
-
-### 🔧 Способ 4: Кросс-компиляция (самый сложный, если на роутере нет gcc)
-
-**Для:** На роутере нет gcc и вы не можете его установить
-
-```bash
-# 1. Скачайте OpenWRT SDK для вашего роутера:
-#    https://openwrt.org/downloads
-
-# 2. Распакуйте:
-tar xzf OpenWrt-SDK-*.tar.xz
-cd OpenWrt-SDK-*
-
-# 3. Скопируйте tone.c в SDK:
-cp /path/to/tone.c ./
-
-# 4. Найдите правильный компилятор:
-ls staging_dir/toolchain-*/bin/ | grep gcc
-
-# 5. Используйте его (замените PATH):
-staging_dir/toolchain-arm_cortex-a7_gcc-12.2.0_uClibc-1.0.14_eabi/bin/arm-openwrt-linux-gcc -O2 -o tone tone.c
-
-# 6. Скопируйте на роутер:
-scp tone root@192.168.1.1:/usr/bin/
+```sh
+gcc -O2 -Wall -Wextra -std=c99 -DBUZZER_GPIO_PATH='"/sys/class/gpio/gpio10/value"' -o otone otone.c -lm
 ```
 
-**Примечание:** В кросс-компиляции не требуется флаг `-lrt` благодаря modern libc.
+## Usage
 
----
-
-## ⚡ Установка gcc/make (если нет)
-
-### На Windows:
-1. Скачайте MinGW: https://www.mingw-w64.org/
-2. Установите
-3. Добавьте в PATH: `C:\MinGW\bin`
-4. Проверьте: `gcc --version`
-
-### На macOS:
-```bash
-# Установить Command Line Tools:
-xcode-select --install
+```sh
+otone <frequency_hz> <duration_ms> [options]
 ```
 
-### На Linux (Ubuntu/Debian):
-```bash
-sudo apt-get update
-sudo apt-get install gcc make libc6-dev
+Examples:
+
+```sh
+otone 2000 300
+otone 0 1000
+otone 2500 300 -p 50
+otone 1000 800 -c 4000
+otone 2000 300 -d /sys/class/gpio/gpio10/value
+otone 2000 300 -vv
 ```
 
----
+Options:
 
-## ✅ Проверка что все работает
-
-### Вы скомпилировали, теперь проверьте:
-
-```bash
-# 1. Файл существует?
-ls -la ./tone
-
-# 2. Это исполняемый файл?
-file ./tone
-
-# 3. Запустите справку:
-./tone -h
-
-# 4. Проверьте на роутере (если копировали):
-ssh root@192.168.1.1 which tone
+```text
+-d, --device PATH   GPIO value file for the buzzer
+-p, --pwm VALUE     PWM volume from 0 to 100
+-c, --chirp HZ      Sweep from the start frequency to HZ
+-v, --verbose       Verbose output
+-vv                 Verbose output with statistics
+-h, --help          Show help
 ```
 
----
+## Configuration
 
-## Использование
+The detected path is saved to:
 
-### Синтаксис
-
-```bash
-./tone <FREQUENCY_HZ> <DURATION_MS> [OPTIONS]
+```text
+/etc/otone.conf
 ```
 
-### Параметры
+Example config:
 
-| Параметр | Описание | Пример |
-|----------|---------|--------|
-| `FREQUENCY_HZ` | Частота звука в Герцах. Диапазон: 1-20000 Hz. **≤ 0 = пауза** | `2000` |
-| `DURATION_MS` | Длительность звука в миллисекундах (макс. 300000 = 5 мин) | `500` |
-
-### Опции
-
-| Опция | Описание | Пример |
-|-------|---------|--------|
-| `-d PATH`, `--device PATH` | Путь к GPIO файлу баззера | `-d /sys/class/gpio/gpio10/value` |
-| `-p VOLUME`, `--pwm VOLUME` | Громкость 0-100% (PWM контроль) | `-p 50` |
-| `-c END_HZ`, `--chirp END_HZ` | Свип частоты от START к END | `-c 4000` |
-| `-v`, `--verbose` | Подробный вывод | `-v` |
-| `-vv` | Очень подробный + статистика | `-vv` |
-| `-h`, `--help` | Показать справку | `-h` |
-
-### Примеры базового использования
-
-```bash
-# Простой звук
-./tone 2000 500           # Звук 2 кГц на 500 мс
-
-# Пауза (молчание)
-./tone 0 1000             # Тишина на 1 секунду
-
-# Со статистикой
-./tone 2000 500 -vv       # Вывод jitter, overhead и т.д.
-
-# С явным путём к баззеру
-./tone 2000 500 -d /sys/class/gpio/gpio12/value
-
-# С контролем громкости
-./tone 2000 500 -p 50     # 50% мощности
-
-# Свип частоты (chirp)
-./tone 1000 500 -c 4000   # От 1 кГц до 4 кГц за 500 мс
-
-# Комбинирование опций
-./tone 2000 500 -p 75 -v  # 75% громкости с подробным выводом
-```
-
----
-
-## Примеры команд
-
-### Базовые сигналы
-
-```bash
-# Классический звоночек
-tone 1000 300
-
-# Ракета (поднимающийся звук)
-tone 1000 0 -c 4000
-
-# Падение (опускающийся звук)
-tone 4000 0 -c 1000
-
-# Двойной сигнал (две ноты)
-tone 1500 150 && tone 2000 150
-
-# Низкий гудок
-tone 200 500
-
-# Высокий писк
-tone 5000 100
-
-# Проверка звука (4 разных частоты```
-
-### Мелодии
-
-```bash
-# Звук успеха (вверх)
-tone 400 100 && tone 500 100 && tone 600 100
-
-# Звук неудачи (вниз)
-tone 600 100 && tone 500 100 && tone 400 100
-
-# Музыкальная лестница (8 нот)
-for f in 262 294 330 349 392 440 494 523; do tone $f 100; done
-
-# Марш
-tone 330 150 && tone 330 150 && tone 330 150 && tone 264 200
-```
-
-### Специальные эффекты
-
-```bash
-# Фейерверк
-for i in 1 2 3; do tone 1000 0 -c 5000; tone 5000 0 -c 1000; done
-
-# Взрыв (нарастающий объём)
-tone 100 300 -p 20 && tone 100 200 -p 50 && tone 100 100 -p 100
-
-# Сирена (медленный свип)
-tone 1000 1000 -c 5000
-
-# Телепортация
-tone 1000 0 -c 8000 && tone 8000 0 -c 1000
-
-# Лазер
-tone 1000 200 -c 5000
-```
-
-### Звуки устройств
-
-```bash
-# Загрузка (3 ступеньки)
-tone 800 100 && tone 1200 100 && tone 1600 100
-
-# Включение
-tone 200 300 -c 2000
-
-# Выключение
-tone 2000 300 -c 200
-
-# Замок открыт
-tone 1200 100 && tone 1500 100 && tone 1800 100
-```
-
-### Ритмы
-
-```bash
-# Сердцебиение
-for i in 1 2 3 4; do tone 1000 50 && tone 1200 50; sleep 0.3; done
-
-# Маячный сигнал
-tone 2000 300 && tone 3000 100 && tone 3000 100
-
-# Тик-так
-tone 1000 100 && sleep 0.2 && tone 1200 100
-
-# Будильник (повторяющиеся пары)
-for i in 1 2 3 4 5; do tone 2000 50 && tone 0 20 && tone 2000 50 && sleep 0.1; done
-
-# SOS (Morse)
-tone 1000 100 && sleep 0.1 && tone 1000 100 && sleep 0.1 && tone 1000 100 && sleep 0.3 && \
-tone 1000 300 && sleep 0.1 && tone 1000 300 && sleep 0.1 && tone 1000 300
-```
-
----
-
-## Примеры скриптов
-
-### Скрипт 1: Простой будильник
-
-```bash
-#!/bin/sh
-# alarm.sh
-
-echo "=== ALARM! ==="
-tone 2000 100
-tone 0 50
-tone 2000 100
-tone 0 50
-tone 2500 150
-```
-
-**Использование:**
-```bash
-chmod +x alarm.sh
-./alarm.sh
-```
-
-### Скрипт 2: Сирена полиции
-
-```bash
-#!/bin/sh
-# police_siren.sh
-
-echo "Siren!"
-for i in 1 2 3 4 5; do
-    tone 2000 100    # Высокий
-    tone 0 30        # Пауза
-    tone 1000 100    # Низкий
-    tone 0 30        # Пауза
-done
-```
-
-### Скрипт 3: Система уведомлений
-
-```bash
-#!/bin/sh
-# notify.sh - Звуковые уведомления
-
-case "$1" in
-    success)
-        echo "✓ Success!"
-        tone 2000 100
-        tone 0 50
-        tone 2500 100
-        ;;
-    error)
-        echo "✗ Error!"
-        tone 1000 100 -c 500
-        ;;
-    warning)
-        echo "⚠ Warning!"
-        tone 2000 200 -p 50
-        ;;
-    *)
-        echo "Usage: $0 {success|error|warning}"
-        exit 1
-        ;;
-esac
-```
-
-**Использование:**
-```bash
-chmod +x notify.sh
-./notify.sh success   # Успех
-./notify.sh error     # Ошибка
-./notify.sh warning   # Предупреждение
-```
-
-**В других скриптах:**
-```bash
-if command_succeeded; then
-    ./notify.sh success
-else
-    ./notify.sh error
-fi
-```
-
-### Скрипт 4: Мелодия
-
-```bash
-#!/bin/sh
-# melody.sh - Воспроизведение мелодии
-
-# Музыкальные ноты (частоты)
-C=262
-D=294
-E=330
-F=349
-G=392
-A=440
-B=494
-
-echo "Playing melody..."
-
-# Twinkle Twinkle Little Star
-tone $C 300
-tone $C 300
-tone $G 300
-tone $G 300
-tone $A 300
-tone $A 300
-tone $G 600
-tone 0 100
-
-tone $F 300
-tone $F 300
-tone $E 300
-tone $E 300
-tone $D 300
-tone $D 300
-tone $C 600
-```
-
-### Скрипт 5: Диагностика баззера
-
-```bash
-#!/bin/sh
-# diagnostics.sh - Проверка баззера
-
-echo "=== Buzzer Diagnostics ==="
-
-echo "Test 1: Low frequency (500 Hz)..."
-tone 500 200 -v
-sleep 1
-
-echo "Test 2: Optimal frequency (3000 Hz)..."
-tone 3000 200 -v
-sleep 1
-
-echo "Test 3: High frequency (8000 Hz)..."
-tone 8000 200 -v
-sleep 1
-
-echo "Test 4: Volume levels..."
-for vol in 100 75 50 25 10; do
-    echo "  Volume: ${vol}%"
-    tone 2000 100 -p "$vol"
-    tone 0 50
-done
-
-echo "Test 5: Chirp test with statistics..."
-tone 1000 500 -c 5000 -vv
-
-echo "=== All tests completed ==="
-```
-
-### Скрипт 6: Громкость от переменной
-
-```bash
-#!/bin/sh
-# volume_test.sh
-
-VOLUME=${1:-100}
-
-if [ "$VOLUME" -lt 0 ] || [ "$VOLUME" -gt 100 ]; then
-    echo "Error: Volume must be 0-100"
-    exit 1
-fi
-
-echo "Playing at ${VOLUME}% volume..."
-tone 2500 500 -p "$VOLUME"
-```
-
-**Использование:**
-```bash
-./volume_test.sh 25      # Очень тихо
-./volume_test.sh 50      # Половина громкости
-./volume_test.sh 100     # Полная громкость
-```
-
----
-
-## 🎵 Встроенные мелодии (Sounds)
-
-В директории `sounds/` находятся готовые скрипты для проигрывания классических мелодий.
-
-### Mario.sh - Super Mario Bros мелодии
-
-Скрипт содержит две классические мелодии из игры Super Mario Bros:
-1. **Main Theme** - основная тема (80 нот с корректными паузами)
-2. **Underworld Theme** - мелодия подземелья
-
-**Установка и использование:**
-
-```bash
-# На роутере:
-ssh root@192.168.1.1
-
-# Основная тема
-sh /root/tone/sounds/mario.sh mario
-
-# Мелодия подземелья
-sh /root/tone/sounds/mario.sh underworld
-
-# Обе мелодии подряд
-sh /root/tone/sounds/mario.sh both
-```
-
-**Как это работает:**
-
-Скрипт использует вашу скомпилированную программу `tone`:
-
-```bash
-$TONE_BIN 2637 83    # Проигрывает ноту E7 длительностью 83 ms
-sleep 0.108          # Пауза между нотами (1.3x длительность)
-$TONE_BIN 0 0        # Тишина (пауза)
-```
-
-**Характеристики:**
-
-- Точные частоты нот (от источника для Ардуино)
-- Корректные паузы между нотами (1.3x от длительности)
-- Работает на любом роутере с установленной программой `tone`
-- Может быть запущен из cron для автоматических уведомлений
-
-**Примеры использования:**
-
-```bash
-# Проигрывать мелодию каждый час
-# Добавьте в /etc/crontab:
-0 * * * * sh /root/tone/sounds/mario.sh mario
-
-# Или создайте свой скрипт
-#!/bin/sh
-echo "Starting up!"
-sh /root/tone/sounds/mario.sh mario
-```
-
----
-
-
-
-**В большинстве случаев это не нужно!** Программа автоматически найдёт баззер при первом запуске и сохранит путь в конфиг.
-
-Этот раздел для случаев, когда автоопределение не сработало.
-
-### Шаг 1: Подключитесь к роутеру
-
-```bash
-ssh root@192.168.1.1
-```
-
-### Шаг 2: Найдите GPIO контроллеры
-
-```bash
-# Способ 1: Через /sys/class/gpio
-ls -la /sys/class/gpio/
-
-# Способ 2: Поиск по всей системе
-find /sys -name "gpiochip*" -type d
-
-# Способ 3: Конкретные пути (часто встречаются)
-ls /sys/devices/platform/*/gpio/
-```
-
-### Шаг 3: Найдите баззер
-
-```bash
-# Поиск по названию
-find /sys -name "*buzzer*"
-
-# Или ищите в GPIO директориях
-ls /sys/class/gpio/
-ls /sys/devices/platform/1e000000.palmbus/1e000600.gpio/gpiochip0/gpio/  # Пример пути
-```
-
-### Шаг 4: Проверьте путь
-
-Когда найдёте файл (например `/sys/class/gpio/gpio10/value`):
-
-```bash
-# Проверьте, что он читается и пишется
-cat /sys/class/gpio/gpio10/value    # Должно быть 0 или 1
-echo "1" > /sys/class/gpio/gpio10/value  # Включите баззер
-echo "0" > /sys/class/gpio/gpio10/value  # Выключите баззер
-
-# Если услышали звук — это правильный путь!
-```
-
-### Шаг 5: Сохраните путь в конфиг
-
-```bash
-# Способ 1: Отредактировать конфиг вручную
-vi /etc/tone.conf
-# Найдите строку buzzer_path=... и измените её
-
-# Способ 2: Через sed
-sed -i 's|buzzer_path=.*|buzzer_path=/sys/class/gpio/gpio10/value|' /etc/tone.conf
-
-# Способ 3: Удалить конфиг - программа создаст новый при следующем запуске
-rm /etc/tone.conf
-tone 2000 500 -v  # Пересканирует и создаст новый конфиг
-```
-
-### Частые пути для разных роутеров
-
-| Роутер / Платформа | Путь |
-|-------|------|
-| TP-Link (MTK) | `/sys/devices/platform/1e000000.palmbus/1e000600.gpio/gpiochip0/gpio/buzzer/value` |
-| OpenWrt Generic | `/sys/class/gpio/gpio10/value` или `/sys/class/gpio/buzzer/value` |
-| Ramips | `/sys/devices/platform/10000000.palmbus/10000600.gpio/gpiochip0/gpio/buzzer/value` |
-| Медленный поиск | `find /sys -name "*buzzer*" -o -name "*gpio*value"` |
-
----
-
-## Конфигурация и система обнаружения баззера
-
-### 📁 Файл конфигурации (с fallback поддержкой)
-
-После первого запуска программа автоматически создаёт конфиг файл с найденными параметрами.
-
-**Пути поиска конфига (по приоритету):**
-
-1. **`/etc/tone.conf`** - основной путь (если доступен `/etc/` для записи)
-2. **`./tone.conf`** - fallback в текущей директории (если `/etc/` не доступен)
-
-Это позволяет запускать программу даже без доступа к `/etc/`:
-
-```ini
-# Пример содержимого конфига (может быть в /etc/ или в текущей папке)
-
-# OpenWRT Tone Generator Configuration
-# Auto-generated config file
-
-buzzer_path=/sys/devices/platform/1e000000.palmbus/1e000600.gpio/gpiochip0/gpio/buzzer/value
+```text
+buzzer_path=/sys/class/gpio/gpio10/value
 spin_threshold_us=100
-pwm_carrier_freq=10000
 default_volume=100
 enabled=1
 ```
 
-**Параметры конфигурации:**
+## Melody example
 
-| Параметр | Значение | Описание |
-|----------|---------|---------|
-| `buzzer_path` | строка (путь) | Полный путь к GPIO файлу баззера. Автоопределяется при первом запуске. |
-| `spin_threshold_us` | число (мкс) | Порог переключения между sleep и spin-lock. Default: 100 микросекунд. Компенсирует overhead `write()` syscall. |
-| `pwm_carrier_freq` | число (Hz) | Частота несущей для PWM модуляции. Default: 10000 Hz. |
-| `default_volume` | число (%) | Громкость по умолчанию (0-100). Default: 100%. Используется если не указана опция `-p`. |
-| `enabled` | 0 или 1 | Флаг включения. 0 = программа выходит без ошибки; 1 = работает нормально. |
+```sh
+chmod +x sounds/mario.sh
+sounds/mario.sh mario
+sounds/mario.sh underworld
+sounds/mario.sh both
+```
 
-**Как редактировать конфиг на роутере:**
+## Troubleshooting
 
-```bash
+No sound:
+
+```sh
+ls -la /sys/class/gpio
+cat /etc/otone.conf 2>/dev/null || true
+otone 2000 300 -v
+otone 2000 300 -d /sys/class/gpio/gpio10/value
+```
+
+Permission error:
+
+```sh
 ssh root@192.168.1.1
-vi /etc/tone.conf
-
-# Или через echo:
-echo "default_volume=50" >> /etc/tone.conf
+otone 2000 300
 ```
 
-### 🔍 7-слойная система автоопределения баззера
+Compiler missing:
 
-При запуске программа ищет баззер в следующем порядке приоритета:
-
-1. **Конфиг файл** (`/etc/tone.conf`)
-   - Самое быстрое, так как путь уже известен
-   - Сохраняется при первом успешном обнаружении
-
-2. **8 Hardcoded путей** (встроены в программу)
-   - Самые частые пути для популярных роутеров
-   - TP-Link (MTK): `/sys/devices/platform/1e000000.palmbus/1e000600.gpio/gpiochip0/gpio/buzzer/value`
-   - Ramips: `/sys/devices/platform/10000000.palmbus/10000600.gpio/gpiochip0/gpio/buzzer/value`
-   - Generic: `/sys/class/gpio/buzzer/value`, `/sys/class/gpio/gpio0-4/value`
-
-3. **GPIO label поиск**
-   - Сканирует `/sys/class/gpio/*/label` в поиске "buzzer", "beep", "speaker"
-   - Проверяет наличие соответствующего файла `value`
-
-4. **Динамическое сканирование /sys/class/gpio/**
-   - Просматривает все доступные GPIO пины
-   - Пробует первый доступный для записи
-
-5. **Device-tree поиск** (`/proc/device-tree/`)
-   - Ищет ссылки на buzzer в структуре device tree
-   - Комбинирует с методом 4 для подтверждения
-
-6. **Переменная окружения** (`BUZZER_GPIO`)
-   - Если установлена `export BUZZER_GPIO="/path/to/gpio"`, используется она
-
-7. **Флаг компиляции** (`-DBUZZER_GPIO_PATH=...`)
-   - Путь зафиксирован при компиляции
-   - Пропускает все остальные методы поиска
-
-**Пример первого запуска:**
-
-```bash
-# Первый запуск — автоопределение и сохранение
-$ tone 2000 500 -v
-Auto-detected buzzer at: /sys/devices/platform/1e000000.palmbus/1e000600.gpio/gpiochip0/gpio/buzzer/value
-[INFO] Configuration saved to /etc/tone.conf
-Saved buzzer path to config: /etc/tone.conf
-Device: /sys/devices/platform/...
-Starting tone generation...
-
-# Второй запуск — загрузка из конфига (быстрее)
-$ tone 2000 500 -v
-Using buzzer path from config: /sys/devices/platform/...
-Device: /sys/devices/platform/...
-Starting tone generation...
-```
-
-### ⚡ Как это ускоряет работу?
-
-1. **Первый запуск:** 100-500 мс (поиск + сохранение)
-2. **Последующие запуски:** < 10 мс (загрузка из конфига)
-
-Без конфига каждый запуск сканировал бы систему, что медлило работу.
-
----
-
-## Возможности версии 3.0
-
-### � Компенсация overhead syscall
-
-Программа автоматически измеряет задержку `write()` syscall (~3-5 микросекунд на типичном роутере) и компенсирует её при генерации PWM сигналов:
-
-- **Результат:** Duty cycle точно соответствует указанному значению громкости
-- **Особенно важно** для 50% PWM (50 дБ) и других средних значений громкости
-- **Измеряется один раз** при первом запуске генерации в PWM режиме
-
-Это устраняет "грязь" и жужжание при использовании `-p 50` и других значений.
-
-### ✅ Исправленное timing без jitter
-
-Использует абсолютное время переключений вместо относительного:
-
-```c
-// Старый способ (с jitter):
-write(fd, "1", 1);
-long long now = get_nsecs();  // После write!
-wait_until(now + half_period_ns);  // Может быть уже поздно
-
-// Новый способ (без jitter):
-next_switch += half_period_ns;  // Вычислено ДО write()
-write(fd, "1", 1);
-wait_until(next_switch);  // Абсолютное время
-```
-
-**Результат:** 0 нс jitter при нормальных частотах (1-5 кГц)
-
-### �🔄 Chirp (частотная модуляция)
-
-Линейный свип частоты от начальной к конечной:
-
-```bash
-tone 1000 500 -c 4000   # От 1 кГц до 4 кГц за 500 мс
-tone 500 1000 -c 5000   # Сирена: от 500 Гц до 5 кГц за 1 сек
-tone 8000 500 -c 200    # Понижение: от 8 кГц до 200 Гц
-```
-
-### 🎚️ PWM контроль громкости (0-100%)
-
-Вместо полной мощности используется модуляция ширины импульса на несущей частоте 10 кГц:
-
-```bash
-tone 2500 500 -p 100   # 100% (полная мощность)
-tone 2500 500 -p 50    # 50% громкости
-tone 2500 500 -p 25    # 25% (тихо)
-tone 2500 500 -p 10    # 10% (очень тихо)
-```
-
-**Как это работает:** PWM на несущей частоте 10 кГц снижает среднюю мощность, сохраняя тоновый сигнал. Можно также установить громкость по умолчанию в конфиге:
-
-```bash
-# Отредактировать конфиг:
-sed -i 's/default_volume=100/default_volume=50/' /etc/tone.conf
-
-# Теперь все команды без -p будут использовать 50%:
-tone 2000 500  # Будет 50% громкости
-```
-
-### 📊 Расширенная статистика (-vv)
-
-Помогает диагностировать проблемы с точностью:
-
-```bash
-$ tone 2000 500 -vv
---- Statistics ---
-Total toggles: 45000
-Total time: 500.123 ms
-Min period: 499 ns
-Max period: 501 ns
-Jitter: 2 ns
-CPU load: 15%
-```
-
-### 🛡️ Сохранение состояния GPIO
-
-Программа:
-1. Сохраняет исходное состояние GPIO перед началом
-2. Восстанавливает его после завершения
-3. Гарантирует, что не повредит другие системы
-
-### ✅ Проверка доступности
-
-- Проверяет доступность баззера без тестовых писков
-- Выдаёт понятные сообщения об ошибках
-- Правильно обрабатывает отсутствие прав доступа
-
-### ⏱️ Защита от зависаний
-
-- Максимальная длительность: **5 минут** (300000 мс)
-- Контроль частоты: **1-20000 Hz**
-- Предотвращает перегрев и утечку энергии
-
----
-
-## Примеры использования конфигурации
-
-### Пример 1: Изменить громкость по умолчанию на 50%
-
-```bash
-ssh root@192.168.1.1
-sed -i 's/default_volume=100/default_volume=50/' /etc/tone.conf
-
-# Теперь все команды без -p будут использовать 50%:
-tone 2000 500  # 50% громкости
-
-# Но можно переопределить в командной строке:
-tone 2000 500 -p 100  # 100% громкости (игнорирует конфиг)
-```
-
-### Пример 2: Отключить программу в конфиге
-
-```bash
-# На роутере:
-sed -i 's/enabled=1/enabled=0/' /etc/tone.conf
-
-# Теперь программа будет выходить без ошибки:
-# [INFO] tone: disabled in config
-tone 2000 500  # Ничего не произойдет
-```
-
-### Пример 3: Переинициализировать конфиг (полный перестанер)
-
-```bash
-# На роутере:
-rm /etc/tone.conf
-
-# При следующем запуске программа создаст новый конфиг:
-tone 2000 500 -v
-
-# Вывод будет:
-# Auto-detected buzzer at: /sys/devices/platform/...
-# Configuration saved to /etc/tone.conf
-```
-
-### Пример 4: Увеличить spin_threshold для большей точности (но выше CPU load)
-
-```bash
-# Измените threshold с 100 до 200 микросекунд:
-sed -i 's/spin_threshold_us=100/spin_threshold_us=200/' /etc/tone.conf
-
-# Это даст более высокую точность, но может увеличить нагрузку на CPU
-tone 2000 1000 -vv  # Проверить jitter
-```
-
-### Пример 5: Просмотреть и отредактировать конфиг полностью
-
-```bash
-# Просмотр:
-cat /etc/tone.conf
-
-# Редактирование:
-vi /etc/tone.conf
-
-# Типичное содержимое:
-# buzzer_path=/sys/devices/platform/1e000000.palmbus/1e000600.gpio/gpiochip0/gpio/buzzer/value
-# spin_threshold_us=100
-# pwm_carrier_freq=10000
-# default_volume=100
-# enabled=1
-```
-
----
-
-## Рекомендации
-
-### Рекомендуемые частоты
-
-| Диапазон | Применение |
-|----------|-----------|
-| 500-1000 Hz | Низкие, глубокие сигналы (предупреждение) |
-| 1000-2000 Hz | Стандартные сигналы (уведомления) |
-| **2000-4000 Hz** | **⭐ Оптимально для пьезозвучателей** |
-| 4000-8000 Hz | Высокие, пронзительные (тревога) |
-| > 8000 Hz | Предупредительные звуки (аварийные сигналы) |
-
-### Советы
-
-**1. Выберите правильную частоту**
-```bash
-# Найдите оптимальную для вашего баззера
-for f in 1000 2000 3000 4000 5000; do
-    echo "Testing $f Hz..."
-    tone "$f" 200
-    sleep 1
-done
-```
-
-**2. Используйте громкость разумно**
-```bash
-# Вместо полной мощности
-tone 2000 5000           # Потребляет много энергии
-
-# Лучше с PWM
-tone 2000 5000 -p 50     # 50% мощности, меньше энергии
-```
-
-**3. Интегрируйте в систему**
-
-Добавьте в `/etc/crontab` для регулярных уведомлений:
-```bash
-# Проверка каждый час
-0 * * * * tone 3000 30 -p 30
-```
-
-**4. Проверьте стабильность**
-```bash
-# Если много jitter, может быть системная нагрузка
-tone 2000 1000 -vv
-
-# Попробуйте остановить фоновые процессы
-killall uhttpd  # Остановить веб-интерфейс
-tone 2000 1000 -vv
-```
-
-### ⚠️ Важные замечания
-
-1. **Разные баззеры** — звучат по-разному на разных роутерах. Экспериментируйте!
-
-2. **PWM может не работать** — на старых роутерах PWM может быть не поддержан. Тестируйте!
-
-3. **Real-time приоритет** — программа попытается его установить, но это может не работать. Продолжит работу с обычным приоритетом.
-
-4. **Энергопотребление** — частые переключения потребляют энергию. Используйте PWM для снижения нагрузки.
-
-5. **Безопасность оборудования** — не используйте слишком часто и слишком громко. Может повредить баззер!
-
----
-
-## 🆘 Troubleshooting - Если что-то не работает
-
-### Проблема 1: "gcc: command not found"
-
-**Причина:** gcc не установлен
-
-**Решение:**
-```bash
-# На компьютере (Windows):
-# Скачайте MinGW: https://www.mingw-w64.org/
-
-# На macOS:
-xcode-select --install
-
-# На Linux (Ubuntu/Debian):
-sudo apt-get install gcc
-
-# На роутере (через opkg):
+```sh
 opkg update
-opkg install gcc libc-dev
+opkg install gcc make libc-dev
 ```
 
----
+## SEO keywords
 
-### Проблема 2: "make: command not found"
+OpenWrt buzzer, OpenWrt GPIO, router beeper, GPIO sysfs buzzer, embedded Linux audio alert, C buzzer generator, OpenWrt notification sound, piezo buzzer tool, router diagnostics, Linux GPIO beep.
 
-**Причина:** make не установлен
+## Suggested GitHub topics
 
-**Решение:** Используйте Способ 3 (ручная компиляция):
-```bash
-gcc -O2 -o tone tone.c -lrt
-```
+`openwrt`, `gpio`, `buzzer`, `beeper`, `embedded-linux`, `router`, `c`, `cli`, `sysfs`, `piezo`, `diagnostics`, `linux`
 
----
+## License
 
-### Проблема 3: Ошибка компиляции "undefined reference to `clock_gettime'" или "cannot find -lrt"
-
-**Причина:** На современных системах (особенно OpenWRT с musl libc) флаг `-lrt` не требуется или не доступен
-
-**Решение:**
-```bash
-# Просто опустите флаг -lrt:
-gcc -O2 -o tone tone.c
-
-# Если всё ещё ошибка, проверьте Makefile:
-# Откройте Makefile и убедитесь что LDFLAGS не содержит -lrt
-cat Makefile | grep LDFLAGS
-
-# Если содержит -lrt, отредактируйте:
-# Замените: LDFLAGS ?= -lrt
-# На:       LDFLAGS ?= -lm
-```
-
----
-
-### Проблема 4: На роутере нет звука
-
-**Проверьте по порядку:**
-
-```bash
-# 1. Программа установлена?
-which tone
-
-# 2. Программа работает?
-tone 2000 500 -v     # Должна что-то вывести
-
-# 3. Баззер найден и конфиг создан?
-cat /etc/tone.conf   # Должен быть файл с buzzer_path
-
-# 4. Конфиг актуален?
-tone 2000 500 -vv    # Должна вывести "Using buzzer path from config"
-
-# 5. Баззер доступен?
-ls -la /sys/class/gpio/gpio10/value  # Должен быть файл
-```
-
-# 4. Конфиг актуален?
-tone 2000 500 -vv    # Должна вывести "Using buzzer path from config"
-
-# 5. Права доступа?
-# Команда должна запускаться от root:
-sudo tone 2000 500   # или просто от root user
-```
-
-**Если нет звука:**
-1. Проверьте, что баззер физически подключен к роутеру
-2. Может быть отключен в BIOS/конфиге роутера
-3. Конфиг повреждён - переинициализируйте:
-   ```bash
-   rm /etc/tone.conf
-   tone 2000 500 -v  # Создаст новый конфиг
-   ```
-
----
-
-### Проблема 4b: Конфиг выводит "disabled in config"
-
-**Причина:** В конфиге установлено `enabled=0`
-
-**Решение:**
-```bash
-# Включите в конфиге:
-sed -i 's/enabled=0/enabled=1/' /etc/tone.conf
-
-# Или переинициализируйте конфиг:
-rm /etc/tone.conf
-tone 2000 500 -v
-```
-
----
-
-### Проблема 5: "Permission denied" при запуске
-
-**Причина:** Нет прав доступа
-
-**Решение:**
-```bash
-# Запустите от root:
-sudo tone 2000 500
-
-# Или на роутере подключитесь как root:
-ssh root@192.168.1.1
-tone 2000 500
-```
-
----
-
-### Проблема 6: Баззер не найден автоматически
-
-**Если программа выводит "Error: buzzer device not found":**
-
-```bash
-# 1. Найдите баззер вручную:
-find /sys -name "*buzzer*" -o -name "gpio*value" | head -20
-
-# 2. Проверьте, что это баззер:
-cat /path/to/file  # Должно быть 0 или 1
-echo 1 > /path/to/file  # Должен быть звук
-
-# 3. Сохраните путь в конфиг:
-echo "buzzer_path=/sys/class/gpio/gpio10/value" >> /etc/tone.conf
-
-# 4. Или используйте явно в команде:
-tone 2000 500 -d /sys/class/gpio/gpio10/value
-
-# 5. Если нашли путь - обновите конфиг:
-sed -i 's|buzzer_path=.*|buzzer_path=/sys/class/gpio/gpio10/value|' /etc/tone.conf
-```
-
----
-
-### Проблема 7: Компиляция медленная или зависает
-
-**Причина:** На роутере мало памяти или процессора
-
-**Решение:**
-```bash
-# 1. Завершите фоновые процессы:
-killall uhttpd    # Остановить веб-интерфейс
-killall dnsmasq   # Остановить DNS
-
-# 2. Повторите компиляцию:
-make clean
-make
-
-# 3. Если всё ещё медленно → используйте Способ 1
-#    (компилируйте на компьютере)
-```
-
----
-
-### Проблема 8: "scp: command not found" при копировании файла
-
-**Причина:** scp не доступна на компьютере
-
-**Решение:**
-
-```bash
-# На Windows используйте WinSCP или другой SCP клиент
-# Или используйте PowerShell встроенный SCP
-
-# На Linux/Mac scp обычно есть, попробуйте:
-which scp
-```
-
----
-
-### Проблема 9: Не могу подключиться к роутеру (ssh)
-
-**Причина:** Неправильный адрес IP или пароль
-
-**Проверьте:**
-```bash
-# 1. Какой IP роутера? (обычно 192.168.1.1)
-ping 192.168.1.1
-
-# 2. SSH включен на роутере?
-# (Проверьте в веб-интерфейсе роутера)
-
-# 3. Правильный пароль? (обычно admin)
-ssh root@192.168.1.1
-
-# 4. Если SSH не работает, используйте telnet:
-telnet 192.168.1.1
-```
-
----
-
-### Проблема 10: Много jitter в статистике (-vv)
-
-**Причина:** Системная нагрузка
-
-**Решение:**
-```bash
-# 1. Остановите ненужные процессы:
-killall uhttpd dnsmasq
-killall -9 update
-
-# 2. Повторите тест:
-tone 2000 1000 -vv
-
-# 3. Если jitter всё еще большой → это нормально
-#    (зависит от железа)
-```
-
----
-
-### Проблема 11: "tone: command not found" на роутере
-
-**Причина:** Программа не установлена в PATH
-
-**Решение:**
-```bash
-# Вариант 1: Укажите полный путь:
-/usr/bin/tone 2000 500
-
-# Вариант 2: Установите правильно:
-scp tone root@192.168.1.1:/usr/bin/
-ssh root@192.168.1.1 chmod +x /usr/bin/tone
-
-# Вариант 3: Добавьте в PATH:
-export PATH=$PATH:/tmp
-/tmp/tone 2000 500
-```
-
----
-
-### Проблема 12: Как посмотреть логи ошибок?
-
-**Программа логирует ошибки в syslog. Просмотрите:**
-
-```bash
-# На роутере просмотрите логи:
-logread | grep tone
-
-# Или в реальном времени:
-logread -f | grep tone
-
-# Полный лог системы:
-dmesg | tail -20
-```
-
----
-
-### Проблема 13: Компилятор показывает предупреждения (warnings)
-
-**Это нормально!** Программа будет работать.
-
-Если хотите без предупреждений:
-```bash
-# Используйте более строгий стандарт:
-gcc -O2 -Wall -Wextra -std=c99 -o tone tone.c
-```
-
----
-
-## 🔍 Быстрая диагностика (скопируйте и запустите)
-
-```bash
-#!/bin/sh
-echo "=== ДИАГНОСТИКА ==="
-
-echo "1. Проверка gcc:"
-gcc --version 2>/dev/null && echo "✓ gcc установлен" || echo "✗ gcc НЕ установлен"
-
-echo ""
-echo "2. Проверка make:"
-make --version 2>/dev/null && echo "✓ make установлен" || echo "✗ make НЕ установлен"
-
-echo ""
-echo "3. Проверка tone:"
-[ -f ./tone ] && echo "✓ tone скомпилирован" || echo "✗ tone НЕ скомпилирован"
-
-echo ""
-echo "4. Проверка SSH подключения:"
-ssh -o ConnectTimeout=1 root@192.168.1.1 "echo OK" && echo "✓ SSH работает" || echo "✗ SSH не работает"
-
-echo ""
-echo "5. Проверка на роутере:"
-ssh root@192.168.1.1 "which tone && tone 2000 200 -v" && echo "✓ tone работает на роутере" || echo "✗ tone не работает"
-
-echo ""
-echo "6. Проверка конфига на роутере:"
-ssh root@192.168.1.1 "cat /etc/tone.conf" && echo "✓ Конфиг существует" || echo "✗ Конфиг отсутствует"
-
-echo ""
-echo "7. Проверка логов:"
-ssh root@192.168.1.1 "logread | grep tone | tail -5" && echo "✓ Логи доступны" || echo "✗ Логов нет"
-```
-
-Сохраните в файл `diagnose.sh` и запустите:
-```bash
-chmod +x diagnose.sh
-./diagnose.sh
-```
-
----
-
-## Лицензия
-
-Не указана
+No license file is included yet. Add a license before accepting outside contributions.
