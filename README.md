@@ -153,4 +153,4 @@ OpenWrt buzzer, OpenWrt GPIO, router beeper, GPIO sysfs buzzer, embedded Linux a
 
 ## License
 
-No license file is included yet. Add a license before accepting outside contributions.
+BSD 3-Clause. See [LICENSE](LICENSE).
