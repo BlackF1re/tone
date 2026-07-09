@@ -14,7 +14,7 @@ It is useful for OpenWrt router diagnostics, audible boot/status alerts, GPIO bu
 - Optional verbose diagnostics and simple timing statistics
 - Includes a Mario melody script example in `sounds/mario.sh`
 
-## Install on OpenWrt by copy-paste
+## Install on OpenWrt
 
 SSH into the router and run:
 
