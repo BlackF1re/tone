@@ -1,9 +1,8 @@
-# .gitignore
-# Исключаем бинарники и временные файлы
 *.o
 *.out
 *.exe
-tone
+otone
+otone.conf
 *.swp
 *.swo
 *.bak
