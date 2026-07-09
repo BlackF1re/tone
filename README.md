@@ -143,14 +143,6 @@ opkg update
 opkg install gcc make libc-dev
 ```
 
-## SEO keywords
-
-OpenWrt buzzer, OpenWrt GPIO, router beeper, GPIO sysfs buzzer, embedded Linux audio alert, C buzzer generator, OpenWrt notification sound, piezo buzzer tool, router diagnostics, Linux GPIO beep.
-
-## Suggested GitHub topics
-
-`openwrt`, `gpio`, `buzzer`, `beeper`, `embedded-linux`, `router`, `c`, `cli`, `sysfs`, `piezo`, `diagnostics`, `linux`
-
 ## License
 
 BSD 3-Clause. See [LICENSE](LICENSE).
